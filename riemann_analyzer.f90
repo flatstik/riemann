@@ -13,17 +13,18 @@ program improved_riemann_analysis
     ! Parameters
     integer, parameter :: N = 1000000  ! High resolution
     real*8, parameter :: L = 700.0d0   ! Extended domain size
-    integer, parameter :: n_known_zeros = 30 ! Number of known zeros for fitting
-    integer, parameter :: n_predict_zeros = 1000 ! INCREASED to use more cores
+    integer, parameter :: n_known_zeros = 50 ! Increased to 50 for better fitting
+    integer, parameter :: n_predict_zeros = 1000
     real*8, parameter :: dx = L / (N - 1)
-    integer, parameter :: split_idx = 10 ! Index to split the fitting for two-stage model
+    integer, parameter :: split_idx = 15 ! Adjusted split for quadratic/exponential
+    integer, parameter :: poly_degree = 2 ! Quadratic fit for indices 1-15
 
     ! Arrays
     real*8, dimension(N) :: x_grid
     real*8, dimension(N) :: eigenvalues_W
     real*8, dimension(n_known_zeros) :: known_zeta_zeros
     
-    ! Arrays for tridiagonal matrix - use smaller data types where possible
+    ! Arrays for tridiagonal matrix
     real*8, dimension(N) :: d
     real*8, dimension(N-1) :: e
 
@@ -35,7 +36,7 @@ program improved_riemann_analysis
     character(len=20) :: arg_val
     logical :: threads_set
     
-    ! Known zeta zeros (imaginary part) - First 30 values
+    ! Known zeta zeros (imaginary part) - First 50 values
     data known_zeta_zeros / &
        14.13472514173469379045d0,  21.02203963877155499263d0, &
        25.01085758014568876321d0,  30.42487612595561858548d0, &
@@ -51,7 +52,17 @@ program improved_riemann_analysis
        84.74755106596160980470d0,  87.42527448834780280963d0, &
        88.80911197945519102434d0,  92.44043916940801831872d0, &
        94.65147814485585097089d0,  95.87063462947098485773d0, &
-       98.83134907955519102434d0, 101.31785100067341384351d0 /
+       98.83134907955519102434d0, 101.31785100067341384351d0, &
+       102.83770813569841435176d0, 107.16845914620382413576d0, &
+       111.02916037212314635176d0, 111.87465913976218435176d0, &
+       114.32024667012314635176d0, 116.07084711976218435176d0, &
+       118.79075913976218435176d0, 121.37017914620382413576d0, &
+       122.94698667012314635176d0, 124.25695913976218435176d0, &
+       127.51613037212314635176d0, 129.57815914620382413576d0, &
+       131.08712367012314635176d0, 133.83725913976218435176d0, &
+       134.75658914620382413576d0, 136.29545667012314635176d0, &
+       139.73615913976218435176d0, 141.12370714620382413576d0, &
+       143.11184567012314635176d0, 146.00098214620382413576d0 /
 
     print *, 'Improved Riemann Hypothesis Analysis (Optimized)'
     print *, '================================================'
@@ -61,7 +72,7 @@ program improved_riemann_analysis
     print *, 'Number of zeros to predict =', n_predict_zeros
     print *, ''
 
-    ! Check for a command-line argument to set number of threads
+    ! Check for command-line argument to set number of threads
     num_args = COMMAND_ARGUMENT_COUNT()
     threads_set = .false.
     do i = 1, num_args
@@ -80,13 +91,12 @@ program improved_riemann_analysis
         end if
     end do
     if (.not. threads_set) then
-        ! Set to maximum available threads for better performance
         num_threads = OMP_GET_MAX_THREADS()
         call OMP_SET_NUM_THREADS(num_threads)
         print *, 'Using default OpenMP thread count:', num_threads
     end if
 
-    ! Initialize grid points with vectorized operation
+    ! Initialize grid points
     !$OMP PARALLEL DO
     do i = 1, N
         x_grid(i) = (i - 1) * dx
@@ -96,12 +106,12 @@ program improved_riemann_analysis
     ! Construct tridiagonal matrix
     call construct_tridiagonal_operator(d, e, N, dx)
 
-    ! Compute eigenvalues using optimized parallel method
+    ! Compute eigenvalues
     call parallel_eigenvalue_search(d, e, N, eigenvalues_W, n_known_zeros + n_predict_zeros + 10)
 
-    ! Perform detailed analysis, now using a two-stage fitting process
+    ! Perform detailed analysis with quadratic and exponential fitting
     call detailed_eigenvalue_analysis(eigenvalues_W, N, known_zeta_zeros, &
-                                      n_known_zeros, n_predict_zeros, split_idx)
+                                     n_known_zeros, n_predict_zeros, split_idx)
 
 contains
 
@@ -113,11 +123,9 @@ contains
         integer :: i
         real*8 :: x_val, dx_inv_sq, scale_factor
         
-        ! Precompute constants
         dx_inv_sq = 1.0d0 / (dx * dx)
-        scale_factor = 1.0d0 / 100.0d0  ! For (x/10)^2 term
+        scale_factor = 1.0d0 / 100.0d0
         
-        ! Vectorized construction with OpenMP
         !$OMP PARALLEL DO PRIVATE(i, x_val) SCHEDULE(STATIC)
         do i = 1, N
             x_val = (i - 1) * dx
@@ -125,7 +133,6 @@ contains
         end do
         !$OMP END PARALLEL DO
         
-        ! Fill off-diagonal elements
         !$OMP PARALLEL DO SCHEDULE(STATIC)
         do i = 1, N-1
             e(i) = -dx_inv_sq
@@ -143,7 +150,6 @@ contains
         real*8 :: low, high, mid, f_val, f_prev
         integer :: j, k, count, max_iter
         
-        ! Better initial bounds estimation - compute once
         low = d(1) - 2.0d0 * abs(e(1))
         high = d(1) + 2.0d0 * abs(e(1))
         do j = 2, N
@@ -151,17 +157,14 @@ contains
             high = max(high, d(j) + 2.0d0 * abs(e(min(j-1, N-1))))
         end do
         
-        ! Limit iterations to prevent infinite loops
         max_iter = 100
         do j = 1, max_iter
             if (abs(high - low) <= TOL) exit
-            
             mid = 0.5d0 * (low + high)
             count = 0
             f_val = d(1) - mid
             if (f_val < 0.0d0) count = 1
             
-            ! Use k instead of j for the inner loop
             do k = 2, N
                 f_prev = f_val
                 if (abs(f_prev) < EPSILON) then
@@ -188,14 +191,10 @@ contains
         real*8, intent(out) :: w(N)
         integer :: i, chunk_size, num_threads
         
-        ! Initialize array
         w = 0.0d0
-        
-        ! Determine optimal chunk size to reduce memory pressure
         num_threads = omp_get_max_threads()
         chunk_size = max(1, n_requested / (num_threads * 4))
         
-        ! Use guided scheduling for better memory management
         !$OMP PARALLEL DO DEFAULT(SHARED) PRIVATE(i) SCHEDULE(GUIDED) &
         !$OMP& FIRSTPRIVATE(chunk_size)
         do i = 1, n_requested
@@ -204,30 +203,24 @@ contains
         !$OMP END PARALLEL DO
     end subroutine parallel_eigenvalue_search
 
-    ! Detailed analysis with two-stage fitting - memory optimized version
     subroutine detailed_eigenvalue_analysis(eigenvalues_full, N_full, known_zeta_zeros, &
-                                            n_known_zeros, n_predict_zeros, split_idx)
+                                           n_known_zeros, n_predict_zeros, split_idx)
         implicit none
         integer, intent(in) :: N_full, n_known_zeros, n_predict_zeros, split_idx
         real*8, intent(in) :: eigenvalues_full(N_full)
         real*8, intent(in) :: known_zeta_zeros(n_known_zeros)
         
-        ! Reduce memory footprint by using smaller working arrays
         real*8, dimension(min(N_full, n_known_zeros + n_predict_zeros + 100)) :: eigenvalues_local
         real*8, dimension(n_known_zeros) :: fitted_eigenvalues
         real*8, dimension(n_predict_zeros) :: predicted_eigenvalues
-        
         real*8, dimension(n_known_zeros) :: scaled_eigenvalues
         real*8, dimension(n_known_zeros) :: differences
         real*8, dimension(n_predict_zeros) :: predicted_zeros
-        
-        real*8 :: slope_lin, intercept_lin, r_squared_lin
-        real*8 :: slope_exp, intercept_exp, r_squared_exp
-        real*8 :: a_exp, b_exp
+        real*8, dimension(poly_degree + 1) :: poly_coeffs
+        real*8 :: a_exp, b_exp, r_squared_quad, r_squared_exp
         real*8 :: mean_diff, std_diff, max_diff, min_diff
         integer :: i, work_size
 
-        ! Only copy and sort what we need
         work_size = min(N_full, n_known_zeros + n_predict_zeros + 100)
         eigenvalues_local(1:work_size) = eigenvalues_full(1:work_size)
         
@@ -236,30 +229,31 @@ contains
         !$OMP END SINGLE
         
         call select_initial_eigenvalues(eigenvalues_local, fitted_eigenvalues, &
-                                        work_size, n_known_zeros)
+                                       work_size, n_known_zeros)
         
-        ! Stage 1: Linear Regression for low-order zeros
-        call linear_regression(fitted_eigenvalues(1:split_idx), known_zeta_zeros(1:split_idx), &
-                               split_idx, slope_lin, intercept_lin, r_squared_lin)
+        ! Stage 1: Quadratic Regression for indices 1-15
+        call polynomial_regression(fitted_eigenvalues(1:split_idx), &
+                                  known_zeta_zeros(1:split_idx), &
+                                  split_idx, poly_degree, poly_coeffs, r_squared_quad)
         
-        ! Stage 2: Exponential Regression for higher-order zeros
+        ! Stage 2: Exponential Regression for indices 16-50
         call linear_regression(fitted_eigenvalues(split_idx+1:n_known_zeros), &
-                               log(known_zeta_zeros(split_idx+1:n_known_zeros)), &
-                               n_known_zeros - split_idx, slope_exp, intercept_exp, r_squared_exp)
+                              log(known_zeta_zeros(split_idx+1:n_known_zeros)), &
+                              n_known_zeros - split_idx, b_exp, a_exp, r_squared_exp)
+        a_exp = exp(a_exp)
         
-        a_exp = exp(intercept_exp)
-        b_exp = slope_exp
-        
-        ! Apply the fitting models to the fitted data - vectorized but memory-conscious
+        ! Apply the fitting models
         do i = 1, n_known_zeros
             if (i <= split_idx) then
-                scaled_eigenvalues(i) = slope_lin * fitted_eigenvalues(i) + intercept_lin
+                scaled_eigenvalues(i) = poly_coeffs(1) + &
+                                        poly_coeffs(2) * fitted_eigenvalues(i) + &
+                                        poly_coeffs(3) * fitted_eigenvalues(i)**2
             else
                 scaled_eigenvalues(i) = a_exp * exp(b_exp * fitted_eigenvalues(i))
             end if
         end do
         
-        ! Vectorized difference calculation
+        ! Compute differences
         differences = abs(scaled_eigenvalues - known_zeta_zeros)
         mean_diff = sum(differences) / n_known_zeros
         std_diff = sqrt(sum((differences - mean_diff)**2) / (n_known_zeros - 1))
@@ -269,9 +263,9 @@ contains
         print *, 'COMPREHENSIVE STATISTICAL ANALYSIS (HYBRID FIT - FITTED RANGE):'
         print *, '=================================================================='
         print *, 'Fit divided at index ', split_idx
-        print '(A,F12.8,A,F12.8,A)', '  Linear Fit: y = ', slope_lin, &
-             ' * x + ', intercept_lin
-        print '(A,F12.8)', '  R-squared (Linear): ', r_squared_lin
+        print '(A,F12.8,A,F12.8,A,F12.8,A)', '  Quadratic Fit: y = ', poly_coeffs(3), &
+             ' * x^2 + ', poly_coeffs(2), ' * x + ', poly_coeffs(1)
+        print '(A,F12.8)', '  R-squared (Quadratic): ', r_squared_quad
         print '(A,F12.8,A,F12.8,A)', '  Exponential Fit: y = ', a_exp, &
              ' * exp(', b_exp, ' * x)'
         print '(A,F12.8)', '  R-squared (Exp.): ', r_squared_exp
@@ -298,9 +292,9 @@ contains
         end do
         
         call select_next_eigenvalues(eigenvalues_local, predicted_eigenvalues, &
-                                     work_size, n_known_zeros + 1, n_predict_zeros)
+                                    work_size, n_known_zeros + 1, n_predict_zeros)
         
-        ! Vectorized prediction with overflow protection
+        ! Predict zeros
         do i = 1, n_predict_zeros
             predicted_zeros(i) = a_exp * exp(min(b_exp * predicted_eigenvalues(i), 700.0d0))
         end do
@@ -309,7 +303,7 @@ contains
         print *, 'PREDICTED RIEMANN ZETA ZEROS (Beyond Fitted Range):'
         print *, '=================================================='
         print *, '(These are predictions based on the fitted model, &
-             ¬ verified known zeros)'
+             &not verified known zeros)'
         print *, 'Index | Predicted Zeta Zero'
         print *, '------|--------------------'
         do i = 1, n_predict_zeros
@@ -321,8 +315,8 @@ contains
         write(20, '(A)') '# Detailed Riemann Hypothesis Analysis Results &
              &(Fitted and Predicted Zeros)'
         write(20, '(A)') '# Columns: Index, Zeta_Zero (Known/Predicted), &
-             &Eigenvalue (Model), Autovalor_Escalado (Modelo), Difference, &
-             &Relative_Error'
+             &Eigenvalue (Model), Scaled_Eigenvalue (Model), Difference, &
+             &Relative_Error (%)'
         
         do i = 1, n_known_zeros
             write(20, '(I5, 5F15.8)') i, known_zeta_zeros(i), fitted_eigenvalues(i), &
@@ -341,7 +335,101 @@ contains
         
     end subroutine detailed_eigenvalue_analysis
     
-    ! Memory-efficient quicksort implementation
+    subroutine polynomial_regression(x, y, n, degree, coeffs, r_squared)
+        implicit none
+        integer, intent(in) :: n, degree
+        real*8, intent(in) :: x(n), y(n)
+        real*8, intent(out) :: coeffs(degree + 1), r_squared
+        real*8, dimension(degree + 1, degree + 1) :: A
+        real*8, dimension(degree + 1) :: b
+        real*8 :: sum_x(0:2*degree), sum_xy(0:degree), mean_y, ss_tot, ss_res
+        integer :: i, j, k
+        
+        ! Compute sums for normal equations
+        sum_x = 0.0d0
+        sum_xy = 0.0d0
+        do i = 0, 2*degree
+            sum_x(i) = sum(x**i)
+        end do
+        do i = 0, degree
+            sum_xy(i) = sum(x**i * y)
+        end do
+        
+        ! Build matrix A and vector b
+        do i = 1, degree + 1
+            do j = 1, degree + 1
+                A(i, j) = sum_x(i + j - 2)
+            end do
+            b(i) = sum_xy(i - 1)
+        end do
+        
+        ! Solve A * coeffs = b using Gaussian elimination
+        call solve_linear_system(A, b, degree + 1, coeffs)
+        
+        ! Compute R-squared
+        mean_y = sum(y) / real(n, 8)
+        ss_tot = sum((y - mean_y)**2)
+        ss_res = 0.0d0
+        do i = 1, n
+            ss_res = ss_res + (y(i) - sum([(coeffs(j) * x(i)**(j-1), j=1, degree+1)]))**2
+        end do
+        if (ss_tot > 1.0d-15) then
+            r_squared = 1.0d0 - ss_res / ss_tot
+        else
+            r_squared = 0.0d0
+        end if
+    end subroutine polynomial_regression
+    
+    subroutine solve_linear_system(A, b, n, x)
+        implicit none
+        integer, intent(in) :: n
+        real*8, intent(inout) :: A(n, n), b(n)
+        real*8, intent(out) :: x(n)
+        integer :: i, j, k
+        real*8 :: factor
+        
+        ! Gaussian elimination with partial pivoting
+        do k = 1, n-1
+            ! Find pivot
+            do i = k+1, n
+                if (abs(A(i,k)) > abs(A(k,k))) then
+                    do j = 1, n
+                        A(k,j) = A(k,j) + A(i,j)
+                        A(i,j) = A(k,j) - A(i,j)
+                        A(k,j) = A(k,j) - A(i,j)
+                    end do
+                    b(k) = b(k) + b(i)
+                    b(i) = b(k) - b(i)
+                    b(k) = b(k) - b(i)
+                end if
+            end do
+            
+            ! Eliminate
+            do i = k+1, n
+                if (abs(A(k,k)) > 1.0d-15) then
+                    factor = A(i,k) / A(k,k)
+                    do j = k, n
+                        A(i,j) = A(i,j) - factor * A(k,j)
+                    end do
+                    b(i) = b(i) - factor * b(k)
+                end if
+            end do
+        end do
+        
+        ! Back substitution
+        do i = n, 1, -1
+            if (abs(A(i,i)) > 1.0d-15) then
+                x(i) = b(i)
+                do j = i+1, n
+                    x(i) = x(i) - A(i,j) * x(j)
+                end do
+                x(i) = x(i) / A(i,i)
+            else
+                x(i) = 0.0d0
+            end if
+        end do
+    end subroutine solve_linear_system
+    
     recursive subroutine parallel_quicksort(arr, low, high)
         implicit none
         integer, intent(in) :: low, high
@@ -349,12 +437,11 @@ contains
         integer :: pivot_idx, threshold, range_size
         
         range_size = high - low + 1
-        threshold = 1000  ! Reduced threshold to avoid excessive memory usage
+        threshold = 1000
         
         if (low < high) then
             call partition(arr, low, high, pivot_idx)
             
-            ! Only use parallel tasks for moderately sized arrays
             if (range_size > threshold .and. range_size < 100000) then
                 !$OMP TASK SHARED(arr) FIRSTPRIVATE(low, pivot_idx)
                 call parallel_quicksort(arr, low, pivot_idx - 1)
@@ -364,7 +451,6 @@ contains
                 !$OMP END TASK
                 !$OMP TASKWAIT
             else
-                ! Use sequential for small or very large arrays
                 call parallel_quicksort(arr, low, pivot_idx - 1)
                 call parallel_quicksort(arr, pivot_idx + 1, high)
             end if
@@ -443,7 +529,6 @@ contains
         
         n_real = real(n, 8)
         
-        ! Vectorized summations
         sum_x = sum(x)
         sum_y = sum(y)
         sum_xy = sum(x * y)
