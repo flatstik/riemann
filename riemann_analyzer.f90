@@ -5,6 +5,11 @@ program improved_riemann_analysis
     ! This program models the Riemann zeta function zeros using a quantum
     ! mechanical operator, following the Hilbert-Pólya strategy.
 
+    ! sudo apt install libopenblas-dev libopenmpi-dev
+    ! gfortran -g -fbacktrace -o riemann-mp riemann.f90 -lopenblas -fopenmp
+    ! ulimit -s unlimited
+    ! ./riemann-mp -threads x
+
     ! Parameters
     integer, parameter :: N = 1000000  ! High resolution
     real*8, parameter :: L = 700.0d0   ! Extended domain size
