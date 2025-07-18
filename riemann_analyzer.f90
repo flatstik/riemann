@@ -2,13 +2,8 @@ program improved_riemann_analysis
     use omp_lib
     implicit none
 
-    ! This program models the Riemann zeta function zeros using a quantum    
+    ! This program models the Riemann zeta function zeros using a quantum
     ! mechanical operator, following the Hilbert-Pólya strategy.
-
-    ! sudo apt install libopenblas-dev libopenmpi-dev
-    ! gfortran -g -fbacktrace -o riemann-mp riemann_analyzer.f90 -lopenblas -fopenmp
-    ! ulimit -s unlimited
-    ! ./riemann-mp -threads x
 
     ! Parameters
     integer, parameter :: N = 1000000  ! High resolution
@@ -300,9 +295,9 @@ contains
         call select_next_eigenvalues(eigenvalues_local, predicted_eigenvalues, &
                                      work_size, n_known_zeros + 1, n_predict_zeros)
         
-        ! Vectorized prediction but in chunks to save memory
+        ! Vectorized prediction with overflow protection
         do i = 1, n_predict_zeros
-            predicted_zeros(i) = a_exp * exp(b_exp * predicted_eigenvalues(i))
+            predicted_zeros(i) = a_exp * exp(min(b_exp * predicted_eigenvalues(i), 700.0d0))
         end do
         
         print *, ''
@@ -313,7 +308,7 @@ contains
         print *, 'Index | Predicted Zeta Zero'
         print *, '------|--------------------'
         do i = 1, n_predict_zeros
-            print '(I5, A, F20.10)', n_known_zeros + i, ' | ', predicted_zeros(i)
+            print '(I5, A, E20.10)', n_known_zeros + i, ' | ', predicted_zeros(i)
         end do
         
         ! Write results to file
@@ -321,7 +316,7 @@ contains
         write(20, '(A)') '# Detailed Riemann Hypothesis Analysis Results &
              &(Fitted and Predicted Zeros)'
         write(20, '(A)') '# Columns: Index, Zeta_Zero (Known/Predicted), &
-             &Eigenvalue (Model), Scaled_Eigenvalue (Model), Difference, &
+             &Eigenvalue (Model), Autovalor_Escalado (Modelo), Difference, &
              &Relative_Error'
         
         do i = 1, n_known_zeros
@@ -331,7 +326,7 @@ contains
         end do
         
         do i = 1, n_predict_zeros
-            write(20, '(I5, F15.8, F15.8)') n_known_zeros + i, predicted_zeros(i), &
+            write(20, '(I5, E15.8, F15.8)') n_known_zeros + i, predicted_zeros(i), &
                 predicted_eigenvalues(i)
         end do
         close(20)
